@@ -5,6 +5,10 @@ track, with **no limit switches and no magnets anywhere on the rail**. The
 TMC2209's StallGuard detects the physical end stop by sensing motor load, so the
 only moving part is the carriage itself.
 
+
+https://github.com/user-attachments/assets/3cb52449-026c-47b7-80da-1f1348390a66
+
+
 It runs ESPHome on an ESP32-C3 Super Mini, appears in Home Assistant as a cover
 entity, and is driven by a Zigbee remote plus two automations tied to an outdoor
 light sensor: open at dusk, close in bright sun.
