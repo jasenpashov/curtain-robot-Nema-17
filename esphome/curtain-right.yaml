@@ -1,0 +1,574 @@
+# =============================================================================
+#  Curtain robot - RIGHT curtain
+#  ESPHome config for an ESP32-C3 driving a NEMA 17 through a TMC2209.
+#
+#  The end stops are found with StallGuard (sensorless homing): the driver
+#  senses motor load and raises DIAG when the carriage hits a hard stop.
+#  There are no limit switches and no magnets on the rail.
+#
+#  Full build notes: https://www.instructables.com/ESPHome-Curtain-Robot-With-TMC2209-Sensorless-Homi/
+#
+#  BEFORE FLASHING
+#    1. Copy secrets.yaml.example to secrets.yaml and fill in your WiFi.
+#    2. Generate your own API key:  openssl rand -base64 32
+#    3. Check the marking on the driver's sense resistors (R100/R110/R150)
+#       and set `rsense` to match.
+#    4. Calibrate sg_threshold on the live slider, then write it in here.
+# =============================================================================
+
+esphome:
+  name: curtain-right
+  friendly_name: Curtain Right
+  on_boot:
+    priority: -100
+    then:
+      # Enable the driver first - a previous cycle may have left it disabled.
+      - output.turn_on: driver_enable
+      - delay: 100ms
+      - tmc2209.configure:
+          microsteps: 8          # keep at 8 or below in step/dir mode
+          interpolation: true
+          tcool_threshold: 400   # minimum speed at which StallGuard is active
+      - tmc2209.currents:
+          irun: 8                # run current: 8 = ~470 mA, 12 = ~700 mA, 16 = ~940 mA
+          ihold: 4               # small holding current keeps the driver responsive
+          standstill_mode: freewheeling
+      - tmc2209.stallguard:
+          threshold: ${sg_threshold}
+
+      # If a watchdog restart interrupted a movement, replay that command.
+      # Capped at three attempts so a persistent fault cannot loop forever.
+      - if:
+          condition:
+            lambda: 'return id(retry_cmd) != 0;'
+          then:
+            - if:
+                condition:
+                  lambda: 'return id(retry_count) < 3;'
+                then:
+                  - delay: 3s
+                  - lambda: |-
+                      id(retry_count) += 1;
+                      ESP_LOGW("blind", "Retrying %s after watchdog restart (attempt %d/3)",
+                               id(retry_cmd) == 1 ? "OPEN" : "CLOSE", id(retry_count));
+                  - if:
+                      condition:
+                        lambda: 'return id(retry_cmd) == 1;'
+                      then:
+                        - lambda: 'id(retry_cmd) = 0;'
+                        - script.execute: do_open
+                      else:
+                        - lambda: 'id(retry_cmd) = 0;'
+                        - script.execute: do_close
+                else:
+                  - logger.log:
+                      format: "Retry limit reached - giving up"
+                      level: ERROR
+                  - lambda: |-
+                      id(retry_cmd) = 0;
+                      id(retry_count) = 0;
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+  level: DEBUG
+  logs:
+    sensor: WARN      # the step counters are chatty; raise to DEBUG while calibrating
+    tmc2209: INFO
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Curtain-Right Setup"
+    password: "12345678"
+
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_key_right
+
+ota:
+  - platform: esphome
+
+# The TMC2209 component is a third-party one. It ships its own fork of
+# ESPHome's core `stepper` component, so `stepper` must stay in this list
+# even though it is never configured directly.
+external_components:
+  - source: github://slimcdk/esphome-custom-components
+    components: [ tmc2209_hub, tmc2209, stepper ]
+    refresh: 0s
+
+# Single-wire UART to the driver's PDN_UART pad:
+#   GPIO20 (ESP RX) -> straight to the pad
+#   GPIO21 (ESP TX) -> to the same pad through a 1 kOhm resistor
+# On boards with separate RX/TX pins (Bigtreetech and close clones) the
+# resistor is already fitted: cross the wires and leave it out.
+uart:
+  tx_pin: GPIO21
+  rx_pin: GPIO20
+  baud_rate: 115200
+
+substitutions:
+  # CALIBRATED VALUE - find it with the live slider, then write it here.
+  # Higher = more sensitive = stalls more easily.
+  # 35 works for a 2.5 m track with a heavy blackout curtain.
+  sg_threshold: "35"
+
+globals:
+  # Suppresses stall detection while the motor accelerates through
+  # StallGuard's blind zone, where the reading is meaningless.
+  - id: ignore_stall
+    type: bool
+    restore_value: false
+    initial_value: 'true'
+
+  # Direction of the current move; decides whether OPEN or CLOSED is published.
+  - id: last_dir_open
+    type: bool
+    restore_value: true
+    initial_value: 'true'
+
+  - id: pos_check
+    type: int
+    restore_value: false
+    initial_value: '0'
+
+  # Step position when the current move started, used to measure travel.
+  - id: start_pos
+    type: int32_t
+    restore_value: false
+    initial_value: '0'
+
+  - id: last_travel
+    type: int32_t
+    restore_value: false
+    initial_value: '0'
+
+  - id: cycle_count
+    type: int32_t
+    restore_value: true
+    initial_value: '0'
+
+  # Command to replay after a watchdog restart: 0 = none, 1 = open, 2 = close.
+  - id: retry_cmd
+    type: int
+    restore_value: true
+    initial_value: '0'
+
+  - id: retry_count
+    type: int
+    restore_value: true
+    initial_value: '0'
+
+output:
+  # Onboard blue LED, active low, used as a "motor running" indicator.
+  - platform: gpio
+    pin:
+      number: GPIO8
+      inverted: true
+    id: led_gpio
+
+  # EN is driven manually rather than through the stepper component, so the
+  # driver can be power-cycled in software (see the wake_driver script).
+  - platform: gpio
+    pin: GPIO5
+    id: driver_enable
+    inverted: true     # turn_on pulls the pin LOW, which ENABLES the driver
+
+stepper:
+  - platform: tmc2209
+    id: my_stepper
+    address: 0x00
+    rsense: 110 mOhm   # read the marking on the sense resistors: R100 / R110 / R150
+    diag_pin: GPIO6    # soldered to the bare DIAG pad, not a header pin
+    step_pin:
+      number: GPIO3
+      inverted: true
+    dir_pin:
+      number: GPIO4
+      inverted: true   # the two curtains run in opposite directions; if open
+                       # and close come out reversed on this unit, flip to false
+    max_speed: 2000
+    acceleration: 250
+    deceleration: 250
+
+    on_stall:
+      - if:
+          condition:
+            lambda: 'return id(ignore_stall);'
+          then:
+            - logger.log: "Stall ignored (startup/accel window)"
+          else:
+            - logger.log: "STALL detected - reached end stop"
+            - script.stop: travel_timeout
+            - stepper.set_target:
+                id: my_stepper
+                target: !lambda 'return id(my_stepper).current_position;'
+            - light.turn_off: led_output
+
+            # Measure how far this move actually travelled and clear the retry state.
+            - lambda: |-
+                int32_t cur = id(my_stepper).current_position;
+                id(last_travel) = abs(cur - id(start_pos));
+                id(cycle_count) = id(cycle_count) + 1;
+                id(retry_count) = 0;
+                id(retry_cmd) = 0;
+                int32_t full = (int32_t) id(full_travel_num).state;
+                int32_t pct  = (int32_t) id(min_travel_pct).state;
+                int32_t thr  = full * pct / 100;
+                ESP_LOGI("blind", "TRAVEL: %d steps | from %d to %d | dir=%s | threshold=%d (%d%% of %d)",
+                         id(last_travel), id(start_pos), cur,
+                         id(last_dir_open) ? "OPEN" : "CLOSE",
+                         thr, pct, full);
+
+            # Only a long enough travel flips the open/closed state. A short
+            # manual nudge leaves it alone, so an automation that tests for
+            # "open" still fires later in the day.
+            - if:
+                condition:
+                  lambda: |-
+                    int32_t full = (int32_t) id(full_travel_num).state;
+                    int32_t pct  = (int32_t) id(min_travel_pct).state;
+                    return id(last_travel) >= (full * pct / 100);
+                then:
+                  - if:
+                      condition:
+                        lambda: 'return id(last_dir_open);'
+                      then:
+                        - cover.template.publish:
+                            id: blind_cover
+                            state: OPEN
+                            current_operation: IDLE
+                      else:
+                        - cover.template.publish:
+                            id: blind_cover
+                            state: CLOSED
+                            current_operation: IDLE
+                else:
+                  - logger.log: "Short travel - state NOT changed"
+                  - cover.template.publish:
+                      id: blind_cover
+                      current_operation: IDLE
+
+cover:
+  - platform: template
+    name: "Curtain Right"
+    id: blind_cover
+    device_class: blind
+    optimistic: false   # state changes only when an end stop is really reached
+    assumed_state: true
+    has_position: false
+    open_action:
+      - script.execute: do_open
+    close_action:
+      - script.execute: do_close
+    stop_action:
+      - script.execute: do_stop
+
+time:
+  - platform: homeassistant
+    id: ha_time
+    on_time:
+      # Preventive restart every 3 hours.
+      # The external TMC2209 component carries an old fork of ESPHome's core
+      # stepper and stops producing step pulses after many hours of idling.
+      # Only recreating the component fixes it, so the ESP is restarted on a
+      # schedule. See the troubleshooting section of the Instructable.
+      - seconds: 0
+        minutes: 30           # offset from the LEFT unit so both never reboot together
+        hours: /3
+        then:
+          - if:
+              condition:
+                lambda: 'return id(my_stepper).current_position == id(my_stepper).target_position;'
+              then:
+                - logger.log: "Preventive 3h restart"
+                - button.press: restart_button
+              else:
+                - logger.log: "Restart skipped - motor moving"
+
+script:
+  # Hardware reset of the driver through EN, then reapply every register.
+  # mode must stay `single`: interrupting this mid-pulse can leave EN low.
+  - id: wake_driver
+    mode: single
+    then:
+      - logger.log: "Waking driver (EN pulse + reconfigure)"
+      - output.turn_off: driver_enable
+      - delay: 200ms
+      - output.turn_on: driver_enable
+      - delay: 100ms
+      - tmc2209.configure:
+          microsteps: 8
+          interpolation: true
+          tcool_threshold: 400
+      - tmc2209.currents:
+          irun: 8
+          ihold: 4
+          standstill_mode: freewheeling
+      - tmc2209.stallguard:
+          threshold: ${sg_threshold}
+
+  # If the position has not moved 2 s after a command, the stepper component
+  # has wedged. Remember the command and restart, so on_boot can replay it.
+  - id: motion_watchdog
+    mode: restart
+    then:
+      - lambda: 'id(pos_check) = id(my_stepper).current_position;'
+      - delay: 2s
+      - if:
+          condition:
+            lambda: |-
+              return id(my_stepper).current_position == id(pos_check) &&
+                     id(my_stepper).current_position != id(my_stepper).target_position;
+          then:
+            - logger.log: "WATCHDOG: no movement despite command - restarting"
+            - lambda: |-
+                id(retry_cmd) = id(last_dir_open) ? 1 : 2;
+                global_preferences->sync();
+            - button.press: restart_button
+
+  # Safety net: a full travel takes about 45 s, so 90 s means something is wrong
+  # and the motor should not keep pushing.
+  - id: travel_timeout
+    mode: restart
+    then:
+      - delay: 90s
+      - if:
+          condition:
+            lambda: 'return id(my_stepper).current_position != id(my_stepper).target_position;'
+          then:
+            - logger.log:
+                format: "TIMEOUT: no end stop after 90s - stopping"
+                level: ERROR
+            - script.execute: do_stop
+
+  - id: do_open
+    mode: restart
+    then:
+      - script.stop: do_close
+      - output.turn_on: driver_enable
+      - logger.log: "Opening (until end stop)"
+      - script.execute: wake_driver
+      - script.wait: wake_driver
+      - output.turn_on: driver_enable
+      - lambda: |-
+          id(ignore_stall) = true;
+          id(last_dir_open) = true;
+          id(start_pos) = id(my_stepper).current_position;
+      - cover.template.publish:
+          id: blind_cover
+          current_operation: OPENING
+      - stepper.set_target:
+          id: my_stepper
+          target: -1000000      # effectively infinite; the stall is what stops us
+      - script.execute: motion_watchdog
+      - script.execute: travel_timeout
+      - light.turn_on:
+          id: led_output
+          effect: "Blink"
+      # Ignore stalls while accelerating through StallGuard's blind zone.
+      # Raise this if the carriage stops right after starting.
+      - delay: 3s
+      - lambda: 'id(ignore_stall) = false;'
+
+  - id: do_close
+    mode: restart
+    then:
+      - script.stop: do_open
+      - output.turn_on: driver_enable
+      - logger.log: "Closing (until end stop)"
+      - script.execute: wake_driver
+      - script.wait: wake_driver
+      - output.turn_on: driver_enable
+      - lambda: |-
+          id(ignore_stall) = true;
+          id(last_dir_open) = false;
+          id(start_pos) = id(my_stepper).current_position;
+      - cover.template.publish:
+          id: blind_cover
+          current_operation: CLOSING
+      - stepper.set_target:
+          id: my_stepper
+          target: 1000000
+      - script.execute: motion_watchdog
+      - script.execute: travel_timeout
+      - light.turn_on:
+          id: led_output
+          effect: "Blink"
+      - delay: 3s
+      - lambda: 'id(ignore_stall) = false;'
+
+  - id: do_stop
+    mode: restart
+    then:
+      - script.stop: do_open
+      - script.stop: do_close
+      - script.stop: motion_watchdog
+      - script.stop: travel_timeout
+      - logger.log: "Stopping"
+      - lambda: |-
+          id(ignore_stall) = true;
+          id(retry_cmd) = 0;
+          id(retry_count) = 0;
+      - stepper.set_target:
+          id: my_stepper
+          target: !lambda 'return id(my_stepper).current_position;'
+      - light.turn_off: led_output
+      - output.turn_on: driver_enable
+      # Only the operation is published - open/closed is deliberately left as it was.
+      - cover.template.publish:
+          id: blind_cover
+          current_operation: IDLE
+
+# Belt and braces: make sure EN is never left disabled unnoticed.
+interval:
+  - interval: 5min
+    then:
+      - output.turn_on: driver_enable
+
+button:
+  - platform: restart
+    name: "Restart ESP"
+    id: restart_button
+
+  - platform: template
+    name: "Wake Driver"
+    on_press:
+      - script.execute: wake_driver
+
+  - platform: template
+    name: "Reset Step Counter"
+    on_press:
+      - stepper.report_position:
+          id: my_stepper
+          position: 0
+      - lambda: |-
+          id(start_pos) = 0;
+          id(last_travel) = 0;
+          id(cycle_count) = 0;
+      - logger.log: "Step counter reset to 0"
+
+number:
+  # Live calibration slider - no recompile needed.
+  - platform: template
+    name: "StallGuard Threshold"
+    min_value: 0
+    max_value: 255
+    step: 5
+    initial_value: ${sg_threshold}
+    optimistic: true
+    on_value:
+      - tmc2209.stallguard:
+          threshold: !lambda 'return (int)x;'
+
+  # 0 disables the check: every travel updates the open/closed state.
+  # 70 means only a travel longer than 70% of the full run counts as real.
+  - platform: template
+    name: "Min Travel Percent"
+    id: min_travel_pct
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 0
+    optimistic: true
+    restore_value: true
+    mode: box
+    unit_of_measurement: "%"
+
+  # Measured full travel in steps. Run a few cycles, read "Last Travel Steps",
+  # then enter the value here.
+  - platform: template
+    name: "Full Travel Steps"
+    id: full_travel_num
+    min_value: 1000
+    max_value: 300000
+    step: 500
+    initial_value: 108000
+    optimistic: true
+    restore_value: true
+    mode: box
+    unit_of_measurement: "steps"
+
+sensor:
+  - platform: tmc2209
+    type: motor_load
+    id: motor_load_sensor
+    internal: true
+    update_interval: 30s
+
+  # While calibrating, give this a `name:` and drop the interval to 250ms
+  # so the StallGuard reading is visible in Home Assistant.
+  - platform: tmc2209
+    type: stallguard_result
+    id: stallguard_sensor
+    internal: true
+    update_interval: 30s
+
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
+  - platform: template
+    name: "Position Steps"
+    id: position_steps
+    lambda: 'return id(my_stepper).current_position;'
+    update_interval: 2s
+    accuracy_decimals: 0
+    state_class: measurement
+    unit_of_measurement: "steps"
+
+  - platform: template
+    name: "Last Travel Steps"
+    id: travel_steps
+    lambda: 'return id(last_travel);'
+    update_interval: 5s
+    accuracy_decimals: 0
+    state_class: measurement
+    unit_of_measurement: "steps"
+
+  - platform: template
+    name: "Travel Percent"
+    lambda: |-
+      int32_t full = (int32_t) id(full_travel_num).state;
+      if (full <= 0) return 0;
+      return (float) id(last_travel) * 100.0f / full;
+    update_interval: 5s
+    accuracy_decimals: 1
+    unit_of_measurement: "%"
+
+  - platform: template
+    name: "Cycle Count"
+    lambda: 'return id(cycle_count);'
+    update_interval: 30s
+    accuracy_decimals: 0
+
+text_sensor:
+  # "Brownout Reset" here means the power supply is sagging under the motor's
+  # current peaks - fit the 1000 uF capacitor at the driver's VM.
+  - platform: debug
+    reset_reason:
+      name: "Reset Reason"
+
+debug:
+  update_interval: 60s
+
+light:
+  - platform: binary
+    id: led_output
+    output: led_gpio
+    internal: true
+    effects:
+      - strobe:
+          name: "Blink"
+          colors:
+            - state: true
+              duration: 500ms
+            - state: false
+              duration: 500ms

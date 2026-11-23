@@ -1,0 +1,37 @@
+# Dashboard card for both curtains.
+# The two buttons drive both covers at once - no helper script needed.
+# Replace the entity ids with your own.
+
+type: vertical-stack
+cards:
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Open both
+        icon: mdi:blinds-open
+        icon_height: 32px
+        tap_action:
+          action: perform-action
+          perform_action: cover.open_cover
+          target:
+            entity_id:
+              - cover.curtain_left
+              - cover.curtain_right
+      - type: button
+        name: Close both
+        icon: mdi:blinds
+        icon_height: 32px
+        tap_action:
+          action: perform-action
+          perform_action: cover.close_cover
+          target:
+            entity_id:
+              - cover.curtain_left
+              - cover.curtain_right
+
+  - type: entities
+    entities:
+      - entity: cover.curtain_left
+        name: Left
+      - entity: cover.curtain_right
+        name: Right

@@ -1,0 +1,194 @@
+# =============================================================================
+#  Home Assistant automations for the curtain robot
+#
+#  Before using these, replace:
+#    - the cover entity ids with your own
+#    - the MQTT topic and payloads with what your remote actually sends
+#      (listen to the topic in Developer Tools > MQTT and press each button;
+#       remotes often label buttons differently from the action strings)
+#    - the lux sensor entity id
+# =============================================================================
+
+
+# --- Remote control --------------------------------------------------------
+# Each button toggles: press once to move, press again to stop.
+# The test is on the cover's own state, so no extra "is moving" sensor is needed.
+
+- alias: Curtain Left - Open or Stop
+  description: Stop if moving, otherwise open
+  triggers:
+    - trigger: mqtt
+      topic: zigbee2mqtt/ZigBee Remote Control
+      value_template: '{{ value_json.action | default('''') }}'
+      payload: 1_single
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_left
+          state:
+            - opening
+            - closing
+      then:
+        - action: cover.stop_cover
+          target:
+            entity_id: cover.curtain_left
+      else:
+        - action: cover.open_cover
+          target:
+            entity_id: cover.curtain_left
+  mode: single
+  max_exceeded: silent
+
+
+- alias: Curtain Left - Close or Stop
+  description: Stop if moving, otherwise close
+  triggers:
+    - trigger: mqtt
+      topic: zigbee2mqtt/ZigBee Remote Control
+      value_template: '{{ value_json.action | default('''') }}'
+      payload: 2_single
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_left
+          state:
+            - opening
+            - closing
+      then:
+        - action: cover.stop_cover
+          target:
+            entity_id: cover.curtain_left
+      else:
+        - action: cover.close_cover
+          target:
+            entity_id: cover.curtain_left
+  mode: single
+  max_exceeded: silent
+
+
+- alias: Curtain Right - Open or Stop
+  description: Stop if moving, otherwise open
+  triggers:
+    - trigger: mqtt
+      topic: zigbee2mqtt/ZigBee Remote Control
+      value_template: '{{ value_json.action | default('''') }}'
+      payload: 3_single
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_right
+          state:
+            - opening
+            - closing
+      then:
+        - action: cover.stop_cover
+          target:
+            entity_id: cover.curtain_right
+      else:
+        - action: cover.open_cover
+          target:
+            entity_id: cover.curtain_right
+  mode: single
+  max_exceeded: silent
+
+
+- alias: Curtain Right - Close or Stop
+  description: Stop if moving, otherwise close
+  triggers:
+    - trigger: mqtt
+      topic: zigbee2mqtt/ZigBee Remote Control
+      value_template: '{{ value_json.action | default('''') }}'
+      payload: 4_single
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_right
+          state:
+            - opening
+            - closing
+      then:
+        - action: cover.stop_cover
+          target:
+            entity_id: cover.curtain_right
+      else:
+        - action: cover.close_cover
+          target:
+            entity_id: cover.curtain_right
+  mode: single
+  max_exceeded: silent
+
+
+# --- Daylight automations --------------------------------------------------
+# Driven by an outdoor lux sensor. The five-minute `for` stops a passing cloud
+# or a car headlight from triggering anything.
+#
+# Note that each curtain is checked inside the actions, not in the conditions.
+# A condition at the top would abort the whole automation when the first
+# curtain is already in the target state, and the second would never move.
+
+- alias: Curtains - Auto Close in Bright Sun
+  description: Close each curtain that is open when it gets bright outside
+  triggers:
+    - trigger: numeric_state
+      entity_id:
+        - sensor.outdoor_light
+      above: 30000
+      for:
+        hours: 0
+        minutes: 5
+        seconds: 0
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_left
+          state: open
+      then:
+        - action: cover.close_cover
+          target:
+            entity_id: cover.curtain_left
+    - if:
+        - condition: state
+          entity_id: cover.curtain_right
+          state: open
+      then:
+        - action: cover.close_cover
+          target:
+            entity_id: cover.curtain_right
+  mode: single
+
+
+- alias: Curtains - Auto Open at Dusk
+  description: Open each curtain that is closed when it gets dark outside
+  triggers:
+    - trigger: numeric_state
+      entity_id:
+        - sensor.outdoor_light
+      below: 2400
+      for:
+        hours: 0
+        minutes: 5
+        seconds: 0
+  conditions: []
+  actions:
+    - if:
+        - condition: state
+          entity_id: cover.curtain_left
+          state: closed
+      then:
+        - action: cover.open_cover
+          target:
+            entity_id: cover.curtain_left
+    - if:
+        - condition: state
+          entity_id: cover.curtain_right
+          state: closed
+      then:
+        - action: cover.open_cover
+          target:
+            entity_id: cover.curtain_right
+  mode: single

@@ -1,0 +1,11 @@
+# Never commit real credentials
+secrets.yaml
+esphome/secrets.yaml
+
+# ESPHome build output
+.esphome/
+*.bin
+
+# OS noise
+.DS_Store
+Thumbs.db
