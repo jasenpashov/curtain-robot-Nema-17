@@ -140,24 +140,19 @@ heavy curtain, and the low current keeps the driver cool.
 
 ## 3D printed parts
 
-**Planetary gearbox — two options.** The second is better and is the one to
-build:
+**Planetary gearbox.** A remix of
+[NEMA 14 Stepper Planetary Gearbox 1:4 Compact](https://www.printables.com/model/1193642-nema-14-stepper-planetary-gearbox-14-compact)
+by **CrossedGuardians**, adapted for a NEMA 17 motor. Every part prints flat
+with no supports, thanks to their two-piece planet carrier — full credit to
+them for the idea.
 
-- [5:1 planetary gear reducer for NEMA 17](https://www.printables.com/model/666125-51-planetary-gear-reducer-for-nema-17-stepper-moto)
-  by the original author — my remix corrects the gear set (the published ring is
-  module 0.58 while the sun and planets are 0.63, so the teeth interfere) and
-  reworks the output part to print without supports.
-- **NEMA 17 Planetary Gearbox 1:4.8, Compact, Support-Free** — a remix of
-  [NEMA 14 Stepper Planetary Gearbox 1:4 Compact](https://www.printables.com/model/1193642-nema-14-stepper-planetary-gearbox-14-compact)
-  by **CrossedGuardians**. Every part prints flat with no supports, thanks to
-  their two-piece planet carrier. Full credit to them for the idea.
+Gear set: sun 15T, planet 21T, ring 57T, module 0.657, 20° pressure angle,
+ratio 1:4.8, all three planets meshing correctly at 120°. The STL files live
+in `models/`.
 
-Both use the same corrected gear set: sun 15T, planet 21T, ring 57T, module
-0.657, 20° pressure angle, ratio 1:4.8, all three planets meshing correctly
-at 120°. The STL files live in `models/`.
-
-- In addition, I also use a pre-made model of an M12x18 hex bolt, scaled to 96 percent, from
-https://www.printables.com/model/1345044-hundreds-of-metric-hex-screws-version-1-m2-m3-m4-m
+Also used: an M12×18 hex bolt from
+[Hundreds of metric hex screws](https://www.printables.com/model/1345044-hundreds-of-metric-hex-screws-version-1-m2-m3-m4-m),
+scaled to 96%.
 
 Print with no supports; the files are oriented as exported. Print the gears
 solid or with at least three walls, and turn on elephant-foot compensation
